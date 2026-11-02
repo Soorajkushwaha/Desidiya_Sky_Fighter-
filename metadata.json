@@ -1,0 +1,6 @@
+{
+  "name": "DesiDiya Sky Fighter",
+  "description": "A 3D vertical-scrolling space shooter across the Solar System powered by the DesiDiya Core — Naye Bharat ki Roshni.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
