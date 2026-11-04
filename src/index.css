@@ -11,6 +11,21 @@
     overflow: hidden;
     background-color: #050814;
     font-family: 'Plus Jakarta Sans', system-ui, -apple-system, sans-serif;
+    overscroll-behavior: none;
+    -webkit-tap-highlight-color: transparent;
+    -webkit-touch-callout: none;
+    -webkit-user-select: none;
+    user-select: none;
+  }
+
+  body[data-state='playing'],
+  body[data-state='playing'] canvas {
+    touch-action: none;
+  }
+
+  @keyframes dsf-hit {
+    from { opacity: 1; }
+    to { opacity: 0; }
   }
 
   h1,
@@ -27,3 +42,12 @@
   }
 }
 
+
+.dsf-title {
+  background: linear-gradient(90deg, rgba(5, 8, 20, 0.94) 0%, rgba(5, 8, 20, 0.8) 40%, rgba(5, 8, 20, 0.08) 72%, rgba(5, 8, 20, 0) 100%);
+}
+@media (max-aspect-ratio: 1/1) {
+  .dsf-title {
+    background: linear-gradient(180deg, rgba(5, 8, 20, 0.55) 0%, rgba(5, 8, 20, 0.85) 45%, rgba(5, 8, 20, 0.92) 100%);
+  }
+}

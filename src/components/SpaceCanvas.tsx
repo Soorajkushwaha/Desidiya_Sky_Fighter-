@@ -28,6 +28,7 @@ import {
   stepBossBehavior,
   stepEnemyMovement,
 } from '../game/rules';
+import { getDifficulty } from '../game/difficulty';
 import {
   ActiveBuffs,
   AsteroidEntity,
@@ -228,6 +229,27 @@ export const SpaceCanvas = React.forwardRef<SpaceCanvasHandle, SpaceCanvasProps>
       const camera = new THREE.PerspectiveCamera(48, initW / initH, 0.5, 220);
       camera.position.set(0, 26, 15);
       camera.lookAt(0, 0, -2);
+
+      // Aspect-aware framing: on tall portrait phones widen the FOV (capped) and pull the
+      // camera back so the full playfield width stays visible instead of being cropped.
+      let camDist = 1;
+      const fitCameraToAspect = (w: number, h: number) => {
+        const a = w / h;
+        camera.aspect = a;
+        if (a >= 1.3) {
+          camera.fov = 48;
+          camDist = 1;
+        } else {
+          const halfW = Math.tan(THREE.MathUtils.degToRad(24)) * (a < 1 ? 0.95 : 1.3);
+          const need = halfW / a;
+          const fov = Math.min(62, THREE.MathUtils.radToDeg(2 * Math.atan(need)));
+          camera.fov = fov;
+          camDist = Math.max(1, need / Math.tan(THREE.MathUtils.degToRad(fov / 2)));
+        }
+        camera.updateProjectionMatrix();
+        if (scene.fog instanceof THREE.FogExp2) scene.fog.density = 0.012 / camDist;
+      };
+      fitCameraToAspect(initW, initH);
 
       // 3-Point Warm/Cool Studio Lighting
       const hemiLight = new THREE.HemisphereLight(0x7dd3fc, 0x1e1b4b, 0.85);
@@ -627,7 +649,8 @@ export const SpaceCanvas = React.forwardRef<SpaceCanvasHandle, SpaceCanvasProps>
       const spawnEnemyWave = (waveNum: number, pid: PlanetId) => {
         const pCfg = PLANET_MAP[pid] ?? PLANET_MAP.venus;
         const pool = pCfg.enemyPool;
-        const count = 4 + waveNum * 2;
+        const diff = getDifficulty();
+        const count = Math.max(3, Math.round((4 + waveNum * 2) * diff.enemyCountMul));
         for (let i = 0; i < count; i++) {
           const etype = pool[(waveNum + i) % pool.length];
           const spreadX = ((i - (count - 1) / 2) / Math.max(1, count - 1)) * 18;
@@ -640,6 +663,11 @@ export const SpaceCanvas = React.forwardRef<SpaceCanvasHandle, SpaceCanvasProps>
             pCfg.order,
             missionElapsed,
           );
+          spec.hp = Math.max(1, Math.round(spec.hp * diff.enemyHpMul));
+          spec.maxHp = spec.hp;
+          spec.vx *= diff.enemySpeedMul;
+          spec.vz *= diff.enemySpeedMul;
+          spec.fireCooldown *= diff.enemyFireCooldownMul;
           const mesh = buildEnemyMesh(etype);
           mesh.position.set(spec.x, 0, spec.z);
           worldActorsGroup.add(mesh);
@@ -666,8 +694,8 @@ export const SpaceCanvas = React.forwardRef<SpaceCanvasHandle, SpaceCanvasProps>
         bossEntity.z = -24;
         bossEntity.targetX = 0;
         bossEntity.targetZ = -10.5;
-        bossEntity.hp = pCfg.bossHp;
-        bossEntity.maxHp = pCfg.bossHp;
+        bossEntity.hp = Math.round(pCfg.bossHp * getDifficulty().bossHpMul);
+        bossEntity.maxHp = bossEntity.hp;
         bossEntity.phase = 1;
         bossEntity.attackTimer = 2.0;
         bossEntity.patternIndex = 0;
@@ -709,7 +737,7 @@ export const SpaceCanvas = React.forwardRef<SpaceCanvasHandle, SpaceCanvasProps>
         hp = stats.maxHp;
         maxShield = stats.maxShield;
         shield = stats.maxShield;
-        lives = 2;
+        lives = getDifficulty().lives;
         missiles = stats.maxMissiles;
         maxMissiles = stats.maxMissiles;
         missileCooldown = 0;
@@ -744,6 +772,36 @@ export const SpaceCanvas = React.forwardRef<SpaceCanvasHandle, SpaceCanvasProps>
       // 8. Unified Input Handling (Keyboard + Touch/Mouse Drag)
       const keysPressed = new Set<string>();
       let pointerDragging = false;
+
+      // Relative (thumb-offset) drag: the ship moves by the finger's delta, so the thumb
+      // never covers the ship and you can steer from anywhere on screen.
+      let dragAnchor: { fx: number; fz: number; sx: number; sz: number } | null = null;
+      const screenToPlane = (clientX: number, clientY: number) => {
+        const rect = renderer.domElement.getBoundingClientRect();
+        if (rect.width <= 0 || rect.height <= 0) return null;
+        _ndcVec.x = ((clientX - rect.left) / rect.width) * 2 - 1;
+        _ndcVec.y = -((clientY - rect.top) / rect.height) * 2 + 1;
+        _raycaster.setFromCamera(_ndcVec, camera);
+        if (_raycaster.ray.intersectPlane(_rayPlane, _intersectPt)) {
+          return { x: _intersectPt.x, z: _intersectPt.z };
+        }
+        return null;
+      };
+      const dragTo = (clientX: number, clientY: number) => {
+        const pt = screenToPlane(clientX, clientY);
+        if (!pt || !dragAnchor) return;
+        const gain = 1.25;
+        targetPlayerX = THREE.MathUtils.clamp(
+          dragAnchor.sx + (pt.x - dragAnchor.fx) * gain,
+          PLAYFIELD_BOUNDS.minX,
+          PLAYFIELD_BOUNDS.maxX,
+        );
+        targetPlayerZ = THREE.MathUtils.clamp(
+          dragAnchor.sz + (pt.z - dragAnchor.fz) * gain,
+          PLAYFIELD_BOUNDS.minZ + 3,
+          PLAYFIELD_BOUNDS.maxZ,
+        );
+      };
 
       const screenToPlayfield = (clientX: number, clientY: number) => {
         const rect = renderer.domElement.getBoundingClientRect();
@@ -811,16 +869,24 @@ export const SpaceCanvas = React.forwardRef<SpaceCanvasHandle, SpaceCanvasProps>
       const onPointerDown = (e: PointerEvent) => {
         if (gameStateRef.current !== 'playing') return;
         pointerDragging = true;
-        screenToPlayfield(e.clientX, e.clientY);
+        if (e.pointerType === 'mouse') {
+          dragAnchor = null;
+          screenToPlayfield(e.clientX, e.clientY);
+        } else {
+          const pt = screenToPlane(e.clientX, e.clientY);
+          dragAnchor = pt ? { fx: pt.x, fz: pt.z, sx: playerX, sz: playerZ } : null;
+        }
       };
 
       const onPointerMove = (e: PointerEvent) => {
         if (!pointerDragging || gameStateRef.current !== 'playing') return;
-        screenToPlayfield(e.clientX, e.clientY);
+        if (dragAnchor) dragTo(e.clientX, e.clientY);
+        else screenToPlayfield(e.clientX, e.clientY);
       };
 
       const onPointerUp = () => {
         pointerDragging = false;
+        dragAnchor = null;
       };
 
       const onBlur = () => {
@@ -834,14 +900,14 @@ export const SpaceCanvas = React.forwardRef<SpaceCanvasHandle, SpaceCanvasProps>
       renderer.domElement.addEventListener('pointerdown', onPointerDown);
       window.addEventListener('pointermove', onPointerMove);
       window.addEventListener('pointerup', onPointerUp);
+      window.addEventListener('pointercancel', onPointerUp);
 
       // ResizeObserver for crisp responsive viewport
       const resizeObserver = new ResizeObserver((entries) => {
         for (const entry of entries) {
           const { width, height } = entry.contentRect;
           if (width > 0 && height > 0) {
-            camera.aspect = width / height;
-            camera.updateProjectionMatrix();
+            fitCameraToAspect(width, height);
             renderer.setSize(width, height);
           }
         }
@@ -1053,14 +1119,17 @@ export const SpaceCanvas = React.forwardRef<SpaceCanvasHandle, SpaceCanvasProps>
 
           cameraTrauma = Math.max(0, cameraTrauma - dt * 1.8);
           const shake = cameraTrauma * cameraTrauma * 0.65;
-          const desiredCamX = playerX * 0.18 + (Math.random() - 0.5) * shake;
-          const desiredCamY = 26.5;
-          const desiredCamZ = 14.8 + (Math.random() - 0.5) * shake;
+          const follow = camDist > 1.05 ? 0 : 1; // no side-sway in portrait framing
+          const lookX = playerX * 0.12 * follow;
+          const lookZ = camDist > 1.05 ? -5.5 : -2.5;
+          const desiredCamX = lookX + playerX * 0.06 * follow + (Math.random() - 0.5) * shake;
+          const desiredCamY = 26.5 * camDist;
+          const desiredCamZ = lookZ + 17.3 * camDist + (Math.random() - 0.5) * shake;
           camera.position.lerp(
             new THREE.Vector3(desiredCamX, desiredCamY, desiredCamZ),
             1 - Math.exp(-8 * dt),
           );
-          camera.lookAt(playerX * 0.12, 0, -2.5);
+          camera.lookAt(lookX, 0, lookZ);
 
           // Update buff timers
           if (activeBuffs.doubleDamageTimer > 0) {
@@ -1393,7 +1462,7 @@ export const SpaceCanvas = React.forwardRef<SpaceCanvasHandle, SpaceCanvasProps>
                   activeBuffs.invincibilityTimer <= 0 &&
                   activeBuffs.ultimateSolarTimer <= 0
                 ) {
-                  const dmg = proj.damage;
+                  const dmg = Math.round(proj.damage * getDifficulty().damageTakenMul);
                   if (shield >= dmg) {
                     shield -= dmg;
                   } else {
@@ -1502,13 +1571,15 @@ export const SpaceCanvas = React.forwardRef<SpaceCanvasHandle, SpaceCanvasProps>
 
             if (en.hp <= 0 && en.koTimer <= 0) {
               en.koTimer = 0.28; // KO topple transition
-              score += en.scoreValue;
+              score += Math.round(en.scoreValue * getDifficulty().scoreMul);
               enemiesDefeated++;
               specialCharge = Math.min(100, specialCharge + 5);
               hitstopTimer = Math.max(hitstopTimer, 0.03);
               cameraTrauma = Math.min(1, cameraTrauma + 0.22);
               soundEngine.playExplosion(en.type === 'battleship');
               spawnParticleBurst(en.x, 0.3, en.z, 0xf59e0b, 18, 12, 1.15);
+              spawnParticleBurst(en.x, 0.4, en.z, 0xfff7d6, 10, 18, 0.45);
+              spawnParticleBurst(en.x, 0.2, en.z, 0xef4444, 8, 7, 0.9);
               spawnDropsAt(en.x, en.z, en.coinDrop, en.crystalChance);
             }
 
@@ -1546,14 +1617,16 @@ export const SpaceCanvas = React.forwardRef<SpaceCanvasHandle, SpaceCanvasProps>
               en.type !== 'kamikaze' &&
               en.z > -15 &&
               en.z < 4 &&
-              activeCrowdShooters < 4
+              activeCrowdShooters < getDifficulty().maxShooters
             ) {
               activeCrowdShooters++;
-              en.fireCooldown = en.type === 'battleship' ? 1.3 : 2.1 + Math.random() * 0.8;
+              en.fireCooldown =
+                (en.type === 'battleship' ? 1.3 : 2.1 + Math.random() * 0.8) *
+                getDifficulty().enemyFireCooldownMul;
               const aimDx = playerX - en.x;
               const aimDz = playerZ - en.z;
               const len = Math.hypot(aimDx, aimDz) || 1;
-              const bSpeed = 13.5;
+              const bSpeed = 13.5 * getDifficulty().enemyBulletSpeedMul;
 
               const bMat = new THREE.MeshBasicMaterial({ color: 0xef4444 });
               const bMesh = new THREE.Mesh(enemyBulletGeo, bMat);
@@ -1579,7 +1652,7 @@ export const SpaceCanvas = React.forwardRef<SpaceCanvasHandle, SpaceCanvasProps>
                 activeBuffs.invincibilityTimer <= 0 &&
                 activeBuffs.ultimateSolarTimer <= 0
               ) {
-                const crashDmg = 24;
+                const crashDmg = Math.round(24 * getDifficulty().damageTakenMul);
                 if (shield >= crashDmg) {
                   shield -= crashDmg;
                 } else {
@@ -1636,7 +1709,7 @@ export const SpaceCanvas = React.forwardRef<SpaceCanvasHandle, SpaceCanvasProps>
           if (bossEntity.active && bossRig) {
             if (bossEntity.hp <= 0 && bossEntity.defeatTimer <= 0) {
               bossEntity.defeatTimer = 1.6;
-              score += 2500 * PLANET_MAP[currentPlanetId].order;
+              score += Math.round(2500 * PLANET_MAP[currentPlanetId].order * getDifficulty().scoreMul);
               hitstopTimer = 0.08;
               cameraTrauma = 1.0;
               soundEngine.playExplosion(true);
@@ -1987,6 +2060,7 @@ export const SpaceCanvas = React.forwardRef<SpaceCanvasHandle, SpaceCanvasProps>
         renderer.domElement.removeEventListener('pointerdown', onPointerDown);
         window.removeEventListener('pointermove', onPointerMove);
         window.removeEventListener('pointerup', onPointerUp);
+        window.removeEventListener('pointercancel', onPointerUp);
         renderer.domElement.removeEventListener('webglcontextlost', onContextLost);
         soundEngine.stopMusic();
         renderer.dispose();
