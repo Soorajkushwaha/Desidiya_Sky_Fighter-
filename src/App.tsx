@@ -25,6 +25,7 @@ import {
   PlanetId,
   SaveData,
 } from './game/types';
+import { Difficulty, DIFFICULTIES, loadDifficulty, setDifficulty } from './game/difficulty';
 
 const INITIAL_HUD: HudSnapshot = {
   hp: 120,
@@ -91,6 +92,12 @@ export default function App() {
   // Solar System Illumination animation state (0..100)
   const [illuminationProgress, setIlluminationProgress] = useState<number>(100);
   const canvasRef = useRef<SpaceCanvasHandle | null>(null);
+  const [difficulty, setDifficultyState] = useState<Difficulty>(() => loadDifficulty());
+  const chooseDifficulty = useCallback((d: Difficulty) => {
+    setDifficulty(d);
+    setDifficultyState(d);
+  }, []);
+  const diffCfg = DIFFICULTIES[difficulty];
 
   const updateSave = useCallback((next: SaveData) => {
     setSaveData(next);
@@ -200,6 +207,39 @@ export default function App() {
     });
   }, [saveData.selectedPlanet]);
 
+  // Auto-pause when the tab/app is hidden (phone lock, app switch)
+  useEffect(() => {
+    const onVis = () => {
+      if (document.hidden) {
+        setGameState((prev) => {
+          if (prev === 'playing') {
+            soundEngine.stopMusic();
+            return 'paused';
+          }
+          return prev;
+        });
+      }
+    };
+    document.addEventListener('visibilitychange', onVis);
+    return () => document.removeEventListener('visibilitychange', onVis);
+  }, []);
+
+  // Block pinch-zoom / double-tap zoom / pull-to-refresh while playing
+  useEffect(() => {
+    const prevent = (e: Event) => e.preventDefault();
+    const onTouchMove = (e: TouchEvent) => {
+      if (document.body.dataset.state === 'playing' || e.touches.length > 1) e.preventDefault();
+    };
+    document.addEventListener('gesturestart', prevent);
+    document.addEventListener('dblclick', prevent);
+    document.addEventListener('touchmove', onTouchMove, { passive: false });
+    return () => {
+      document.removeEventListener('gesturestart', prevent);
+      document.removeEventListener('dblclick', prevent);
+      document.removeEventListener('touchmove', onTouchMove);
+    };
+  }, []);
+
   const currentPlanetCfg = PLANET_MAP[saveData.selectedPlanet] ?? PLANET_MAP.venus;
   const currentShipCfg = SPACESHIP_MAP[saveData.selectedShip] ?? SPACESHIP_MAP.tejas_diya;
   const campaignIlluminationPct = computeIlluminationPercentage(saveData.illuminatedPlanets);
@@ -221,10 +261,10 @@ export default function App() {
       {/* STATE 1: TITLE SCREEN (Official DesiDiya Logo + Concise How-To-Play + Unobstructed 3D Showcase) */}
       {gameState === 'title' && (
         <div
-          className="fixed inset-0 z-10 flex flex-col justify-between p-5 sm:p-9 pointer-events-none"
+          className="dsf-title fixed inset-0 z-10 flex flex-col justify-between p-5 sm:p-9 pointer-events-none overflow-y-auto"
           style={{
-            background:
-              'linear-gradient(90deg, rgba(5, 8, 20, 0.94) 0%, rgba(5, 8, 20, 0.80) 40%, rgba(5, 8, 20, 0.08) 72%, rgba(5, 8, 20, 0) 100%)',
+            paddingTop: 'max(1.25rem, env(safe-area-inset-top))',
+            paddingBottom: 'max(1.25rem, env(safe-area-inset-bottom))',
           }}
           data-testid="title-screen"
         >
@@ -265,6 +305,39 @@ export default function App() {
               </div>
             </div>
 
+            {/* Difficulty Mode Selector (remembered in localStorage) */}
+            <div className="space-y-1.5" data-testid="difficulty-selector">
+              <div className="text-[11px] font-mono text-amber-300 tracking-wider">
+                DIFFICULTY · {diffCfg.hint}
+              </div>
+              <div className="grid grid-cols-3 gap-2" role="radiogroup" aria-label="Difficulty">
+                {(['easy', 'medium', 'hard'] as Difficulty[]).map((d) => {
+                  const active = d === difficulty;
+                  const tone =
+                    d === 'easy' ? '#10B981' : d === 'medium' ? '#F59E0B' : '#EF4444';
+                  return (
+                    <button
+                      key={d}
+                      type="button"
+                      role="radio"
+                      aria-checked={active}
+                      data-difficulty={d}
+                      onClick={() => chooseDifficulty(d)}
+                      className="py-2.5 rounded-xl border text-sm font-bold tracking-wide transition-all cursor-pointer"
+                      style={{
+                        borderColor: active ? tone : 'rgba(100,116,139,0.6)',
+                        color: active ? '#0b1020' : '#e2e8f0',
+                        backgroundColor: active ? tone : 'rgba(8, 12, 26, 0.9)',
+                        boxShadow: active ? `0 0 18px ${tone}88` : 'none',
+                      }}
+                    >
+                      {DIFFICULTIES[d].label}
+                    </button>
+                  );
+                })}
+              </div>
+            </div>
+
             {/* Primary Actions (<= 3 Clean Buttons: Play, How to Play, More) */}
             <div className="flex flex-wrap items-center gap-2.5 pt-1">
               <button
@@ -274,7 +347,7 @@ export default function App() {
                   e.currentTarget.blur();
                   startPlanetMission(saveData.selectedPlanet);
                 }}
-                className="px-6 py-3 rounded-xl bg-amber-500 hover:bg-amber-400 text-slate-950 font-bold text-sm tracking-wide transition-colors whitespace-nowrap shrink-0 cursor-pointer shadow-lg"
+                className="w-full sm:w-auto px-6 py-3.5 rounded-xl bg-amber-500 hover:bg-amber-400 text-slate-950 font-bold text-base sm:text-sm tracking-wide transition-colors whitespace-nowrap shrink-0 cursor-pointer shadow-lg shadow-amber-500/30"
               >
                 Launch {currentPlanetCfg.name} Mission
               </button>
@@ -359,7 +432,7 @@ export default function App() {
             />
             <div>
               <div className="text-xs font-mono text-amber-400 uppercase">
-                SECTOR {hud.planetName} · WAVE {hud.wave}/{hud.totalWaves}
+                SECTOR {hud.planetName} · WAVE {hud.wave}/{hud.totalWaves} · {diffCfg.label.toUpperCase()}
               </div>
               <h2 className="text-2xl font-bold text-white mt-0.5">MISSION PAUSED</h2>
             </div>
@@ -537,7 +610,7 @@ export default function App() {
               <>
                 <div>
                   <div className="text-xs font-mono text-red-400 uppercase">
-                    HULL BREACHED · {PLANET_MAP[endStats.planetId].name} SECTOR
+                    HULL BREACHED · {PLANET_MAP[endStats.planetId].name} SECTOR · {diffCfg.label.toUpperCase()}
                   </div>
                   <h2 className="text-2xl sm:text-3xl font-bold text-white mt-1">
                     SPACECRAFT DESTROYED

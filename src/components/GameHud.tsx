@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useEffect, useRef, useState } from 'react';
 import { BRAND_LOGO_URL, POWERUP_INFO } from '../game/campaignData';
 import { HudSnapshot, PowerUpType } from '../game/types';
 
@@ -27,6 +27,14 @@ export const GameHud: React.FC<GameHudProps> = ({
   onSummonBoss,
 }: GameHudProps & { onCycleShield?: () => void }) => {
   const [showMoreInfo, setShowMoreInfo] = useState(false);
+  // Damage flash: pulse a red vignette whenever hull+shield drops
+  const prevHealthRef = useRef(hud.hp + hud.shield);
+  const [hitKey, setHitKey] = useState(0);
+  useEffect(() => {
+    const now = hud.hp + hud.shield;
+    if (now < prevHealthRef.current - 0.5) setHitKey((k) => k + 1);
+    prevHealthRef.current = now;
+  }, [hud.hp, hud.shield]);
 
   const hpPct = Math.max(0, Math.min(100, Math.round((hud.hp / Math.max(1, hud.maxHp)) * 100)));
   const shieldPct = Math.max(
@@ -77,8 +85,24 @@ export const GameHud: React.FC<GameHudProps> = ({
   return (
     <div
       className="fixed inset-0 z-10 pointer-events-none flex flex-col justify-between p-2.5 sm:p-4 select-none"
+      style={{
+        paddingTop: 'max(0.625rem, env(safe-area-inset-top))',
+        paddingBottom: 'max(0.625rem, env(safe-area-inset-bottom))',
+        paddingLeft: 'max(0.625rem, env(safe-area-inset-left))',
+        paddingRight: 'max(0.625rem, env(safe-area-inset-right))',
+      }}
       data-testid="playing-hud"
     >
+      {hitKey > 0 && (
+        <div
+          key={hitKey}
+          className="fixed inset-0 pointer-events-none"
+          style={{
+            boxShadow: 'inset 0 0 120px rgba(239, 68, 68, 0.65)',
+            animation: 'dsf-hit 0.35s ease-out forwards',
+          }}
+        />
+      )}
       {/* Low HP warning peripheral vignette */}
       {hpPct <= 30 && (
         <div
@@ -91,7 +115,7 @@ export const GameHud: React.FC<GameHudProps> = ({
 
       {/* TOP SLIM BAR: Minimal footprint so gameplay stays 92%+ unobstructed */}
       <div className="flex flex-col gap-1.5 w-full">
-        <div className="flex items-start justify-between gap-2 w-full">
+        <div className="flex flex-wrap sm:flex-nowrap items-start justify-between gap-2 w-full">
           {/* TOP-LEFT: Ultra-Compact HP & Shield Strip + Tiny DesiDiya Brand Mark */}
           <div
             className="pointer-events-auto rounded-lg px-2.5 py-1.5 border border-amber-500/30 flex items-center gap-2.5"
@@ -104,9 +128,9 @@ export const GameHud: React.FC<GameHudProps> = ({
               src={BRAND_LOGO_URL}
               alt="DesiDiya"
               referrerPolicy="no-referrer"
-              className="h-6 w-auto object-contain shrink-0"
+              className="hidden sm:block h-6 w-auto object-contain shrink-0"
             />
-            <div className="w-24 sm:w-32 space-y-1">
+            <div className="w-28 sm:w-32 space-y-1">
               <div className="flex items-center justify-between text-[10px] font-mono leading-none">
                 <span className="text-amber-400 font-bold">HP</span>
                 <span className="text-white tabular-nums">
@@ -135,7 +159,7 @@ export const GameHud: React.FC<GameHudProps> = ({
           </div>
 
           {/* TOP-CENTER: Slim Boss Health Bar (Only visible when Boss is active) or Slim Toast */}
-          <div className="flex flex-col items-center max-w-xs sm:max-w-sm w-full px-1">
+          <div className="order-last sm:order-none flex flex-col items-center sm:max-w-sm w-full sm:w-auto sm:flex-1 px-1">
             {hud.bossActive && (
               <div
                 className="w-full rounded-lg px-3 py-1.5 border border-red-500/50"
@@ -314,8 +338,8 @@ export const GameHud: React.FC<GameHudProps> = ({
       </div>
 
       {/* BOTTOM-RIGHT ONLY: Compact Tactical Action Pills (Leaves bottom-left & center 100% open) */}
-      <div className="flex items-end justify-end w-full">
-        <div className="flex items-center gap-1.5 pointer-events-auto">
+      <div className="flex items-end justify-center sm:justify-end w-full">
+        <div className="flex items-center gap-1.5 pointer-events-auto flex-wrap justify-center">
           <button
             type="button"
             tabIndex={-1}
@@ -323,7 +347,7 @@ export const GameHud: React.FC<GameHudProps> = ({
               e.currentTarget.blur();
               onCycleWeapon();
             }}
-            className="px-2.5 py-1.5 rounded-lg border border-amber-500/40 text-left hover:bg-amber-500/15 transition-colors cursor-pointer"
+            className="px-3 py-2.5 sm:px-2.5 sm:py-1.5 rounded-xl sm:rounded-lg border border-amber-500/40 text-left hover:bg-amber-500/15 transition-colors cursor-pointer"
             style={{ backgroundColor: 'rgba(8, 12, 26, 0.85)' }}
           >
             <div className="text-[8px] font-mono text-amber-400 leading-none">[Q] WPN</div>
@@ -340,7 +364,7 @@ export const GameHud: React.FC<GameHudProps> = ({
               e.currentTarget.blur();
               onActivateShield();
             }}
-            className={`px-2.5 py-1.5 rounded-lg border text-left transition-colors cursor-pointer ${
+            className={`px-3 py-2.5 sm:px-2.5 sm:py-1.5 rounded-xl sm:rounded-lg border text-left transition-colors cursor-pointer ${
               hud.shieldSkillCooldown <= 0
                 ? 'border-sky-400/60 text-sky-200 hover:bg-sky-500/20'
                 : 'border-slate-700 text-slate-500 opacity-70'
@@ -363,7 +387,7 @@ export const GameHud: React.FC<GameHudProps> = ({
               e.currentTarget.blur();
               onFireMissile();
             }}
-            className={`px-2.5 py-1.5 rounded-lg border text-left transition-colors cursor-pointer ${
+            className={`px-3 py-2.5 sm:px-2.5 sm:py-1.5 rounded-xl sm:rounded-lg border text-left transition-colors cursor-pointer ${
               hud.missiles > 0
                 ? 'border-orange-400/60 text-orange-200 hover:bg-orange-500/20'
                 : 'border-slate-700 text-slate-500 opacity-70'
@@ -384,7 +408,7 @@ export const GameHud: React.FC<GameHudProps> = ({
               e.currentTarget.blur();
               onTriggerNova();
             }}
-            className={`px-3 py-1.5 rounded-lg border text-left transition-colors cursor-pointer ${
+            className={`px-3 py-2.5 sm:py-1.5 rounded-xl sm:rounded-lg border text-left transition-colors cursor-pointer ${
               hud.specialCharge >= 100
                 ? 'border-amber-300 bg-amber-500/30 text-amber-100'
                 : 'border-amber-500/30 text-slate-300'
